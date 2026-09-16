@@ -15,6 +15,7 @@ export interface BenchmarkCurvePoint {
   date: string
   portfolio: number
   benchmark: number
+  comparison?: number
 }
 
 export interface PortfolioBenchmark {

@@ -28,6 +28,7 @@ from src.platform.notifications.notifier import NotifierManager
 from src.modules.automation.agent_scheduler import AgentScheduler
 from src.modules.market.price_alert_scheduler import PriceAlertScheduler
 from src.modules.paper_trading.paper_trading_scheduler import PaperTradingScheduler
+from src.modules.portfolio.shadow_scheduler import ShadowPortfolioScheduler
 from src.modules.research.context_scheduler import ContextMaintenanceScheduler
 from src.modules.automation.agent_runs import record_agent_run
 from src.platform.observability.log_context import install_log_record_factory, log_context
@@ -51,6 +52,7 @@ scheduler: AgentScheduler | None = None
 price_alert_scheduler: PriceAlertScheduler | None = None
 paper_trading_scheduler: PaperTradingScheduler | None = None
 context_maintenance_scheduler: ContextMaintenanceScheduler | None = None
+shadow_portfolio_scheduler: ShadowPortfolioScheduler | None = None
 
 
 def apply_proxy_env(proxy: str | None) -> None:
@@ -1509,7 +1511,7 @@ async def lifespan(app):
     except Exception as e:
         logger.warning(f"交易日历预热调度失败(降级为只判周末): {e}")
 
-    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler
+    global scheduler, price_alert_scheduler, paper_trading_scheduler, context_maintenance_scheduler, shadow_portfolio_scheduler
     scheduler = build_scheduler()
     scheduler.start()
     logger.info("Agent 调度器已启动")
@@ -1533,6 +1535,12 @@ async def lifespan(app):
         logger.info("模拟盘调度器已启动")
     except Exception as e:
         logger.error(f"模拟盘调度器启动失败: {e}")
+    try:
+        shadow_portfolio_scheduler = ShadowPortfolioScheduler(timezone=Settings().app_timezone)
+        shadow_portfolio_scheduler.start()
+        logger.info("影子组合日净值任务已启动")
+    except Exception as e:
+        logger.error(f"影子组合日净值任务启动失败: {e}")
     try:
         settings = Settings()
         context_maintenance_scheduler = ContextMaintenanceScheduler(
@@ -1560,6 +1568,9 @@ async def lifespan(app):
     if paper_trading_scheduler:
         paper_trading_scheduler.shutdown()
         logger.info("模拟盘调度器已关闭")
+    if shadow_portfolio_scheduler:
+        shadow_portfolio_scheduler.shutdown()
+        logger.info("影子组合日净值任务已关闭")
     if context_maintenance_scheduler:
         context_maintenance_scheduler.shutdown()
         logger.info("上下文维护调度器已关闭")
