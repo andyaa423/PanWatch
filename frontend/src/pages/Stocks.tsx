@@ -17,6 +17,7 @@ import { useToast } from '@panwatch/base-ui/components/ui/toast'
 import StockInsightModal from '@panwatch/biz-ui/components/stock-insight-modal'
 import { DeepAnalysisModal } from '@panwatch/biz-ui/components/deep-analysis-modal'
 import StockPriceAlertPanel from '@panwatch/biz-ui/components/stock-price-alert-panel'
+import ShadowPortfolioReport from '@/components/ShadowPortfolioReport'
 
 interface AgentResult {
   success?: boolean
@@ -1618,6 +1619,7 @@ export default function StocksPage() {
           )}
         </div>
       </div>
+      <ShadowPortfolioReport />
 
       {/* Portfolio Total Summary */}
       {portfolioLoading && !portfolio ? (
