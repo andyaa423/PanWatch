@@ -48,10 +48,10 @@ def test_result_records_market_snapshot_at_decision_time():
     r = map_state_to_result(
         stock=_stock(),
         ta_result=_result("Sell"),
-        market_snapshot={"current_price": 12.34, "open_price": 12.1, "timestamp": "2026-09-16T14:30:00+08:00"},
+        market_snapshot={"market": "CN", "current_price": 12.34, "open_price": 12.1, "timestamp": "2026-09-16T14:30:00+08:00"},
     )
     assert r.raw_data["price_at_analysis"] == 12.34
-    assert r.raw_data["market_snapshot"] == {"current_price": 12.34, "open_price": 12.1, "timestamp": "2026-09-16T14:30:00+08:00"}
+    assert r.raw_data["market_snapshot"] == {"market": "CN", "current_price": 12.34, "open_price": 12.1, "timestamp": "2026-09-16T14:30:00+08:00"}
 
 
 def test_overweight_rating_maps_to_buy_with_zh_label():

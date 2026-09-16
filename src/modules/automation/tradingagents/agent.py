@@ -286,7 +286,7 @@ class TradingAgentsAgent(BaseAgent):
             stock=stock,
             ta_result=ta_result,
             model_label=context.model_label,
-            market_snapshot=data.get("quote") or {},
+            market_snapshot={**(data.get("quote") or {}), "market": stock.market.value},
         )
 
         # 存分析时实时价 → 历史决策表"分析价"立即显示(不必等当日 K线收盘回填)
@@ -313,6 +313,28 @@ class TradingAgentsAgent(BaseAgent):
             )
         except Exception as e:
             logger.warning(f"[TA] save_analysis 失败,不影响主流程: {e}")
+
+        # 影子组合只消费已落库的风险建议；没有启用影子仓位时不会产生交易。
+        try:
+            from src.modules.portfolio.shadow_bridge import enqueue_shadow_decision
+            from src.platform.persistence.database import SessionLocal
+            from src.platform.persistence.models import AnalysisHistory
+
+            shadow_db = SessionLocal()
+            try:
+                source = shadow_db.query(AnalysisHistory).filter(
+                    AnalysisHistory.agent_name == self.name,
+                    AnalysisHistory.stock_symbol == stock.symbol,
+                    AnalysisHistory.analysis_date == analysis_date,
+                ).first()
+                if source and enqueue_shadow_decision(shadow_db, source):
+                    shadow_db.commit()
+                else:
+                    shadow_db.rollback()
+            finally:
+                shadow_db.close()
+        except Exception as e:
+            logger.warning(f"[TA] 写影子组合待执行建议失败,不影响主流程: {e}")
 
         # 6b) 落库到 StockSuggestion(建议池) — 让持仓页/关注列表上的建议徽章
         # 显示 TradingAgents 的 BUY/HOLD/SELL 决策(跟「盘前分析」「收盘复盘」并列)。
