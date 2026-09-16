@@ -34,5 +34,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install PDF rendering libraries and Chinese fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangocairo-1.0-0 libpangoft2-1.0-0 \
+            libcairo2 libcairo-gobject2 libgdk-pixbuf-2.0-0 \
+            libffi-dev libfontconfig1 fonts-noto-cjk
       - run: pip install -r requirements.txt
       - run: python -m pytest tests/ -q --basetemp=.pytest-tmp
