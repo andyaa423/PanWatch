@@ -29,6 +29,7 @@ function BenchChartSvg({
   const allVals: number[] = []
   for (const p of points) {
     allVals.push(p.portfolio, p.benchmark)
+    if (Number.isFinite(p.comparison)) allVals.push(p.comparison!)
   }
   let min = Math.min(...allVals)
   let max = Math.max(...allVals)
@@ -43,8 +44,10 @@ function BenchChartSvg({
 
   const portfolioPts = points.map((p, i) => [xAt(i), yAt(p.portfolio)] as const)
   const benchmarkPts = points.map((p, i) => [xAt(i), yAt(p.benchmark)] as const)
+  const comparisonPts = points.map((p, i) => [xAt(i), yAt(p.comparison!)] as const)
   const portfolioAttr = portfolioPts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
   const benchmarkAttr = benchmarkPts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
+  const comparisonAttr = comparisonPts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
   const [x0, y0] = portfolioPts[0]
   const [xN, yN] = portfolioPts[n - 1]
   const baseline = padTop + innerH
@@ -100,6 +103,8 @@ function BenchChartSvg({
         strokeLinejoin="round"
         strokeLinecap="round"
       />
+
+      {points.every((p) => Number.isFinite(p.comparison)) && <polyline points={comparisonAttr} fill="none" stroke="#16a34a" strokeWidth={1.8} strokeLinejoin="round" strokeLinecap="round" />}
 
       {/* 组合:实线 + 浅面积(主角) */}
       <polygon points={areaAttr} fill="url(#benchchart-area)" stroke="none" />
