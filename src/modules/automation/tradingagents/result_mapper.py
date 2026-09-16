@@ -145,7 +145,7 @@ def map_state_to_result(
             "price_at_analysis": price_at_analysis,
             "market_snapshot": {
                 key: market_snapshot.get(key)
-                for key in ("current_price", "open_price", "high_price", "low_price", "change_pct", "timestamp")
+                for key in ("market", "current_price", "open_price", "high_price", "low_price", "change_pct", "timestamp")
                 if market_snapshot.get(key) is not None
             },
         },
