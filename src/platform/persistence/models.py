@@ -1133,6 +1133,21 @@ class ShadowTrade(Base):
     decision_source = relationship("AnalysisHistory")
 
 
+class ShadowPortfolioNav(Base):
+    """影子组合每日收盘净值；基线持仓与影子持仓共用同一日期记录。"""
+
+    __tablename__ = "shadow_portfolio_nav"
+    __table_args__ = (UniqueConstraint("nav_date", name="uq_shadow_nav_date"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    nav_date = Column(String, nullable=False)  # YYYY-MM-DD
+    baseline_value = Column(Float, nullable=False)
+    shadow_value = Column(Float, nullable=False)
+    cash = Column(Float, nullable=False, default=0.0)
+    realized_pnl = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class ChatConversation(Base):
     """AI 对话会话"""
 
