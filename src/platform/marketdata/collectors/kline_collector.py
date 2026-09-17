@@ -56,6 +56,10 @@ def _fail_cooldown(market: MarketCode) -> float:
 _FETCH_LOCKS: dict[str, threading.Lock] = {}
 _FETCH_LOCKS_GUARD = threading.Lock()
 
+# Tushare 的技术因子是日频数据；同一交易日内无需因弹窗/列表刷新重复请求。
+_TUSHARE_FACTOR_CACHE: dict[str, tuple[float, dict[str, object]]] = {}
+_TUSHARE_FACTOR_TTL_S = 1800
+
 
 def _get_fetch_lock(cache_key: str) -> threading.Lock:
     """返回某 cache_key 的取数锁(进程内复用),用于合并同标的并发请求。"""
@@ -81,6 +85,56 @@ def clear_kline_cache() -> None:
     """清空 K线内存缓存与失败冷却标记(测试隔离用)。"""
     _KLINE_CACHE.clear()
     _FAIL_UNTIL.clear()
+    _TUSHARE_FACTOR_CACHE.clear()
+
+
+def _tushare_ts_code(symbol: str) -> str | None:
+    """将内部 A 股六码转换为 Tushare ``ts_code``。"""
+    code = str(symbol or "").strip().upper().split(".")[0]
+    if len(code) != 6 or not code.isdigit():
+        return None
+    return f"{code}.SH" if code.startswith(("6", "9")) else f"{code}.SZ"
+
+
+def _get_tushare_pro():
+    """独立包装，便于宿主测试和未启用 Tushare 时的惰性加载。"""
+    from marketdata.vendors.tushare_client import get_tushare_pro
+    return get_tushare_pro()
+
+
+def _latest_tushare_volume_factors(symbol: str) -> dict[str, object] | None:
+    """读取两期因子，以 OBV 变化方向而不是绝对值做判断。"""
+    ts_code = _tushare_ts_code(symbol)
+    if not ts_code:
+        return None
+    cached = _TUSHARE_FACTOR_CACHE.get(ts_code)
+    if cached and time.monotonic() - cached[0] < _TUSHARE_FACTOR_TTL_S:
+        return dict(cached[1])
+    try:
+        # Tushare 按复权口径提供专业因子；前端日K默认采用前复权口径。
+        frame = _get_tushare_pro().stk_factor_pro(
+            ts_code=ts_code,
+            limit=2,
+            fields="ts_code,trade_date,obv_qfq,mfi_qfq",
+        )
+        rows = frame.to_dict("records") if frame is not None else []
+        rows = [row for row in rows if row.get("obv_qfq") is not None and row.get("mfi_qfq") is not None]
+        if len(rows) < 2:
+            return None
+        rows.sort(key=lambda row: str(row.get("trade_date") or ""), reverse=True)
+        latest, previous = rows[0], rows[1]
+        result: dict[str, object] = {
+            "obv": float(latest["obv_qfq"]),
+            "obv_change": float(latest["obv_qfq"]) - float(previous["obv_qfq"]),
+            "mfi": float(latest["mfi_qfq"]),
+            "factor_trade_date": str(latest.get("trade_date") or ""),
+            "factor_source": "tushare_stk_factor_pro",
+        }
+        _TUSHARE_FACTOR_CACHE[ts_code] = (time.monotonic(), result)
+        return dict(result)
+    except Exception as exc:
+        logger.debug("Tushare 技术因子获取失败 %s: %s", ts_code, exc)
+        return None
 
 
 def get_index_klines(index_code: str, market: MarketCode, days: int = 120) -> list[KlineData]:
@@ -707,6 +761,7 @@ class KlineCollector:
 
         last_date = klines[-1].date if klines else None
         now = datetime.now(timezone.utc).isoformat()
+        volume_factors = _latest_tushare_volume_factors(symbol) if self.market == MarketCode.CN else None
 
         return {
             # meta
@@ -746,6 +801,7 @@ class KlineCollector:
             # 量能
             "volume_ratio": indicators.volume_ratio,
             "volume_trend": indicators.volume_trend,
+            **(volume_factors or {}),
             # 均线
             "ma5": indicators.ma5,
             "ma10": indicators.ma10,
