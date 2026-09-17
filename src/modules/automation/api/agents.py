@@ -604,14 +604,12 @@ def get_tradingagents_budget(db: Session = Depends(get_db)):
         raise HTTPException(404, "tradingagents agent 未注册")
 
     cfg = agent.config or {}
-    monthly_budget = float(cfg.get("monthly_budget_usd", 10.0))
+    # 仅 deep_model 有硬上限；quick_model 可持续用于日常低成本分析。
+    monthly_deep_budget = float(cfg.get("monthly_deep_budget_usd", 25.0))
 
-    # 复用 cost_tracker 的 SQL 聚合
-    from src.modules.automation.tradingagents.cost_tracker import check_budget, estimate_cost
+    from src.modules.automation.tradingagents.cost_tracker import check_deep_budget, estimate_cost
 
-    budget = check_budget(monthly_budget, "tradingagents")
-
-    # 单次估算(给前端确认弹窗显示)
+    budget = check_deep_budget(monthly_deep_budget, "tradingagents")
     est = estimate_cost(
         debate_rounds=int(cfg.get("debate_rounds", 1)),
         selected_analysts=list(
@@ -622,12 +620,14 @@ def get_tradingagents_budget(db: Session = Depends(get_db)):
 
     return {
         **budget,
+        "budget_scope": "deep_model",
+        "fallback_model": str(cfg.get("quick_model") or cfg.get("deep_model") or ""),
+        "deep_budget_action": cfg.get("deep_budget_action", "fallback_quick"),
         "estimate_next_run": {
             "cost_low_usd": est["cost_low_usd"],
             "cost_high_usd": est["cost_high_usd"],
             "model": est["model"],
         },
-        "over_budget_action": cfg.get("over_budget_action", "reject"),
         "enabled": bool(agent.enabled),
     }
 

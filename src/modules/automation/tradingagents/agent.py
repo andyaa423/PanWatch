@@ -16,7 +16,8 @@ from typing import Any
 
 from src.modules.automation.base import AgentContext, AnalysisResult, BaseAgent
 from src.modules.automation.tradingagents.cost_tracker import (
-    check_budget,
+    check_deep_budget,
+    choose_deep_model,
     estimate_cost,
     get_today_cache_key,
 )
@@ -62,8 +63,10 @@ class TradingAgentsAgent(BaseAgent):
         self,
         analyst_types: list[str] | None = None,
         debate_rounds: int = 1,
-        monthly_budget_usd: float = 10.0,
-        over_budget_action: str = "reject",  # reject / warn / continue
+        monthly_budget_usd: float = 0.0,  # 旧全模型预算，仅保留配置兼容；不再拦截 quick_model
+        over_budget_action: str = "reject",  # 旧配置兼容
+        monthly_deep_budget_usd: float = 25.0,
+        deep_budget_action: str = "fallback_quick",
         cache_ttl_hours: int = 12,
         output_language: str = "Chinese",
         deep_model: str | None = None,    # 推理/辩论/PM 用的强模型 (留空走默认)
@@ -84,6 +87,10 @@ class TradingAgentsAgent(BaseAgent):
         self.debate_rounds = max(1, int(debate_rounds))
         self.monthly_budget_usd = float(monthly_budget_usd)
         self.over_budget_action = over_budget_action
+        self.monthly_deep_budget_usd = max(0.0, float(monthly_deep_budget_usd))
+        self.deep_budget_action = (deep_budget_action or "fallback_quick").strip()
+        if self.deep_budget_action != "fallback_quick":
+            raise ValueError("deep_budget_action 目前只支持 fallback_quick")
         self.cache_ttl_hours = max(0, int(cache_ttl_hours))
         self.output_language = output_language
         self.deep_model = (deep_model or "").strip() or None
@@ -200,20 +207,23 @@ class TradingAgentsAgent(BaseAgent):
                 cached.raw_data["from_cache"] = True
                 return cached
 
-        # 1) 预算检查
-        budget = check_budget(self.monthly_budget_usd, self.name)
-        if budget["exceeded"]:
-            if self.over_budget_action == "reject":
-                raise RuntimeError(
-                    f"本月 TradingAgents 预算已用尽 "
-                    f"(${budget['used']:.2f} / ${self.monthly_budget_usd:.2f})。"
-                    f"如需继续使用,请在「设置」中调高预算上限。"
-                )
-            elif self.over_budget_action == "warn":
-                logger.warning(
-                    f"[TA] 预算已超,但策略=warn,继续执行 "
-                    f"(${budget['used']:.2f} / ${self.monthly_budget_usd:.2f})"
-                )
+        # 1) 深度模型硬预算闸门。上游会在图启动时一次性创建 LLM 客户端，
+        # 所以必须在任何 deep_model 请求前决定本轮是否整体降级到 quick_model。
+        requested_deep_model = self.deep_model or context.ai_client.model
+        effective_quick_model = self.quick_model or requested_deep_model
+        deep_budget = check_deep_budget(self.monthly_deep_budget_usd, self.name)
+        effective_deep_model, deep_budget_state = choose_deep_model(
+            deep_model=requested_deep_model,
+            quick_model=effective_quick_model,
+            budget=deep_budget,
+            action=self.deep_budget_action,
+        )
+        if deep_budget_state["mode"] == "fallback_quick":
+            logger.warning(
+                "[TA预算] 本次深度分析已降级：deep_model=%s -> quick_model=%s",
+                requested_deep_model,
+                effective_deep_model,
+            )
 
         # 2) 构造 TradingAgents config (支持 deep / quick 双模型)
         ta_config = build_ta_llm_config(
@@ -221,12 +231,19 @@ class TradingAgentsAgent(BaseAgent):
             debate_rounds=self.debate_rounds,
             selected_analysts=self.analyst_types,
             output_language=self.output_language,
-            deep_model=self.deep_model,
-            quick_model=self.quick_model,
+            deep_model=effective_deep_model,
+            quick_model=effective_quick_model,
         )
 
-        # 3) 进度回调
-        progress_handler = PanWatchProgressHandler(trace_id, self.name)
+        # 3) 进度回调。降级时 effective_deep_model 与 quick 相同，因此不计入 deep_cost。
+        tracked_deep_model = (
+            requested_deep_model
+            if deep_budget_state["mode"] == "deep" and requested_deep_model != effective_quick_model
+            else None
+        )
+        progress_handler = PanWatchProgressHandler(
+            trace_id, self.name, deep_model=tracked_deep_model
+        )
 
         # 4) 渲染上下文(标的元信息 + 用户持仓)注入到 TA 的 past_context 通道
         current_price = (data.get("quote") or {}).get("current_price")
@@ -288,6 +305,11 @@ class TradingAgentsAgent(BaseAgent):
             model_label=context.model_label,
             market_snapshot={**(data.get("quote") or {}), "market": stock.market.value},
         )
+
+        # 单独保存 deep_cost_usd，下一次分析只据此判断是否允许使用昂贵模型。
+        # 未分离模型的旧历史记录不会被误算为深度成本。
+        result.raw_data["deep_cost_usd"] = float(ta_result.get("deep_cost_usd", 0.0) or 0.0)
+        result.raw_data["deep_budget"] = deep_budget_state
 
         # 存分析时实时价 → 历史决策表"分析价"立即显示(不必等当日 K线收盘回填)
         _quote = data.get("quote") or {}
@@ -504,6 +526,7 @@ class TradingAgentsAgent(BaseAgent):
             "decision": str(decision or "HOLD").upper(),
             "final_state": dict(final_state) if final_state else {},
             "cost_usd": float(cost_usd or 0.0),
+            "deep_cost_usd": float(getattr(progress_handler, "deep_cost_usd", 0.0) or 0.0),
         }
 
     @staticmethod
