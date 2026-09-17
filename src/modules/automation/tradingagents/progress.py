@@ -60,7 +60,9 @@ class PanWatchProgressHandler(_LCBaseCallbackHandler):
     前端通过过滤 log_entries 表的 trace_id + event=ta_progress 拿到时间线。
     """
 
-    def __init__(self, trace_id: str, agent_name: str = "tradingagents"):
+    def __init__(
+        self, trace_id: str, agent_name: str = "tradingagents", deep_model: str | None = None
+    ):
         # langchain_core BaseCallbackHandler 没有 __init__ 参数,直接 super 安全
         try:
             super().__init__()
@@ -71,6 +73,9 @@ class PanWatchProgressHandler(_LCBaseCallbackHandler):
         self.agent_name = agent_name
         self._started_at = time.monotonic()
         self._total_cost = 0.0
+        self._deep_cost = 0.0
+        self._deep_model = (deep_model or "").strip().lower()
+        self._active_llm_model = ""
         self._completed_stages: set[str] = set()
         # OTel 桥接:handler 在异步侧构造(to_thread 之前),此处捕获当前上下文,
         # 供工作线程里的 callback 把节点/LLM 子 span 挂到 root span 下(关闭时为 None)。
@@ -100,23 +105,47 @@ class PanWatchProgressHandler(_LCBaseCallbackHandler):
 
     # ---- LangChain callbacks 接口 ----
 
-    # 关键:LLM 默认按 token 估算成本(deepseek-chat 单价),后续可由调用方注入更精确单价
-    _PRICE_PER_M_PROMPT = 0.14
-    _PRICE_PER_M_COMPLETION = 0.28
+    # 单价按美元/百万 token。未识别模型仍采用保守的 deepseek-chat 估算，
+    # 而 deepseek-v4-pro 需按自己的价格入账，否则月度硬顶会被低估。
+    _MODEL_PRICING_PER_M = {
+        "deepseek-flash": (0.15, 0.60),
+        "deepseek-chat": (0.14, 0.28),
+        "deepseek-v4-pro": (1.32, 3.96),
+    }
+    _DEFAULT_PRICING_PER_M = (0.14, 0.28)
 
-    def on_llm_start(self, serialized, prompts, **kwargs):
-        self._llm_call_count = getattr(self, "_llm_call_count", 0) + 1
-        self._emit("llm_call", "llm_start", call_n=self._llm_call_count)
-        # OTel:TA 的一次 LLM 调用 -> gen_ai 子 span(遵循 GenAI 语义约定)。
-        model = ""
+    def _estimate_llm_cost(self, prompt_tokens: int | float, completion_tokens: int | float) -> float:
+        input_rate, output_rate = self._MODEL_PRICING_PER_M.get(
+            self._active_llm_model, self._DEFAULT_PRICING_PER_M
+        )
+        return (
+            float(prompt_tokens) / 1_000_000 * input_rate
+            + float(completion_tokens) / 1_000_000 * output_rate
+        )
+
+    @staticmethod
+    def _model_from_callback(serialized: Any, kwargs: dict[str, Any]) -> str:
+        """兼容不同 LangChain 版本的模型字段位置。"""
         try:
-            model = (
-                (kwargs.get("invocation_params") or {}).get("model")
-                or (serialized or {}).get("name")
+            invocation = kwargs.get("invocation_params") or {}
+            serialized_kwargs = (serialized or {}).get("kwargs") or {}
+            return str(
+                invocation.get("model")
+                or invocation.get("model_name")
+                or serialized_kwargs.get("model")
+                or serialized_kwargs.get("model_name")
+                or (serialized or {}).get("model")
                 or ""
             )
         except Exception:
-            model = ""
+            return ""
+
+    def on_llm_start(self, serialized, prompts, **kwargs):
+        self._llm_call_count = getattr(self, "_llm_call_count", 0) + 1
+        # OTel:TA 的一次 LLM 调用 -> gen_ai 子 span(遵循 GenAI 语义约定)。
+        model = self._model_from_callback(serialized, kwargs)
+        self._active_llm_model = str(model or "").strip().lower()
+        self._emit("llm_call", "llm_start", call_n=self._llm_call_count, model=model)
         self._otel_llm_span = otel.start_detached_span(
             f"chat {model}".strip() if model else "chat",
             parent_context=self._otel_parent,
@@ -136,18 +165,20 @@ class PanWatchProgressHandler(_LCBaseCallbackHandler):
             pass
         prompt_tokens = usage.get("prompt_tokens") or 0
         completion_tokens = usage.get("completion_tokens") or 0
-        # 累加成本估算
-        cost = (
-            prompt_tokens / 1_000_000 * self._PRICE_PER_M_PROMPT
-            + completion_tokens / 1_000_000 * self._PRICE_PER_M_COMPLETION
-        )
+        # 按实际回调模型归类并估算成本。
+        cost = self._estimate_llm_cost(prompt_tokens, completion_tokens)
         self.record_cost(cost)
+        is_deep_model = bool(self._deep_model and self._active_llm_model == self._deep_model)
+        if is_deep_model:
+            self._deep_cost += cost
         self._emit(
             "llm_call",
             "llm_end",
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             call_cost=round(cost, 6),
+            model=self._active_llm_model,
+            is_deep_model=is_deep_model,
         )
         # OTel:回填 token 用量并结束 gen_ai span。
         if self._otel_llm_span is not None:
@@ -204,6 +235,11 @@ class PanWatchProgressHandler(_LCBaseCallbackHandler):
         self._emit("error", "chain_error", error=str(error)[:200])
 
     # ---- 公共方法 ----
+
+    @property
+    def deep_cost_usd(self) -> float:
+        """本轮实际由 deep_model 产生的累计成本。"""
+        return self._deep_cost
 
     def record_cost(self, usd: float) -> None:
         self._total_cost += usd

@@ -348,6 +348,16 @@ def seed_agents():
                 if isinstance(cfg, dict) and "event_only" not in cfg:
                     cfg["event_only"] = True
                     existing.config = cfg
+            if existing.name == "tradingagents":
+                cfg = existing.config or {}
+                if isinstance(cfg, dict):
+                    # 旧版 $10 是所有模型共用的粗粒度预算，会阻断 Flash；
+                    # 迁移为仅保护 deep_model 的硬上限，保留用户自定义的非默认旧值。
+                    if cfg.get("monthly_budget_usd") == 10.0:
+                        cfg["monthly_budget_usd"] = 0.0
+                    cfg.setdefault("monthly_deep_budget_usd", 25.0)
+                    cfg.setdefault("deep_budget_action", "fallback_quick")
+                    existing.config = cfg
 
     db.commit()
     db.close()

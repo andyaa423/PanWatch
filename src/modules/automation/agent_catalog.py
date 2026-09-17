@@ -141,8 +141,11 @@ AGENT_SEED_SPECS: tuple[AgentSeedSpec, ...] = (
         config={
             "analyst_types": ["market", "social", "news", "fundamentals"],
             "debate_rounds": 1,
-            "monthly_budget_usd": 10.0,
+            # quick_model 不设硬顶；昂贵的 deep_model 由单独的月度上限保护。
+            "monthly_budget_usd": 0.0,  # 旧全模型预算字段，仅为配置兼容保留
             "over_budget_action": "reject",
+            "monthly_deep_budget_usd": 25.0,
+            "deep_budget_action": "fallback_quick",
             "cache_ttl_hours": 12,
             "output_language": "Chinese",
             "deep_model": "",       # 留空走默认 AI Service 的 model;可填如 "claude-sonnet-4"

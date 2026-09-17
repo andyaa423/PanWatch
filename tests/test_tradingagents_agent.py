@@ -19,6 +19,8 @@ from datetime import datetime
 from src.modules.automation.tradingagents.agent import TradingAgentsAgent, TradingAgentsUnavailable
 from src.modules.automation.tradingagents.cost_tracker import (
     check_budget,
+    check_deep_budget,
+    choose_deep_model,
     estimate_cost,
     get_today_cache_key,
 )
@@ -189,6 +191,40 @@ class TestCostTracker(unittest.TestCase):
         est = estimate_cost(debate_rounds=1, selected_analysts=["market"], model="my-custom-llm")
         self.assertGreater(est["cost_low_usd"], 0)
 
+    def test_deep_budget_reaches_limit_falls_back_to_quick_model(self):
+        """深度预算触顶时，下一次分析在建图前整体降级到 quick_model。"""
+        model, state = choose_deep_model(
+            deep_model="deepseek-v4-pro",
+            quick_model="deepseek-flash",
+            budget={"used": 25.0, "limit": 25.0, "exceeded": True},
+        )
+        self.assertEqual(model, "deepseek-flash")
+        self.assertEqual(state["mode"], "fallback_quick")
+        self.assertEqual(state["requested_model"], "deepseek-v4-pro")
+
+    def test_deep_budget_below_limit_keeps_deep_model(self):
+        """尚有深度预算时，保持 deep_model，不能误降级。"""
+        model, state = choose_deep_model(
+            deep_model="deepseek-v4-pro",
+            quick_model="deepseek-flash",
+            budget={"used": 24.99, "limit": 25.0, "exceeded": False},
+        )
+        self.assertEqual(model, "deepseek-v4-pro")
+        self.assertEqual(state["mode"], "deep")
+
+    def test_deep_cost_extractor_ignores_legacy_total_cost(self):
+        """旧记录无 deep_cost_usd 时不误把总成本算为 Pro 成本。"""
+        from src.modules.automation.tradingagents.cost_tracker import (
+            _extract_deep_cost,
+            _extract_deep_log_cost,
+            _is_deep_cost_log,
+        )
+        self.assertEqual(_extract_deep_cost({"cost_usd": 9.99}), 0.0)
+        self.assertEqual(_extract_deep_cost({"deep_cost_usd": "1.25"}), 1.25)
+        self.assertTrue(_is_deep_cost_log({"action": "llm_end", "is_deep_model": True}))
+        self.assertFalse(_is_deep_cost_log({"action": "llm_end", "is_deep_model": False}))
+        self.assertEqual(_extract_deep_log_cost({"call_cost": "0.5"}), 0.5)
+
     def test_get_today_cache_key_includes_today(self):
         """缓存键 — 含日期 + symbol + market + debate_rounds + model"""
         key = get_today_cache_key("600519", "CN", 1, "deepseek-chat")
@@ -243,6 +279,30 @@ class TestProgress(unittest.TestCase):
         handler.record_cost(0.02)
         self.assertAlmostEqual(handler._total_cost, 0.03)
 
+    def test_progress_model_lookup_uses_serialized_model_name(self):
+        """部分 LangChain 版本只在 serialized.kwargs 中给出模型名。"""
+        model = PanWatchProgressHandler._model_from_callback(
+            {"kwargs": {"model_name": "deepseek-v4-pro"}}, {}
+        )
+        self.assertEqual(model, "deepseek-v4-pro")
+
+    def test_progress_handler_tracks_only_configured_deep_model_cost(self):
+        """同一轮中 quick 模型成本不应计入 deep_model 的月度预算。"""
+        handler = PanWatchProgressHandler(
+            trace_id="test-deep-cost", deep_model="deepseek-v4-pro"
+        )
+        handler._active_llm_model = "deepseek-v4-pro"
+        deep_cost = handler._estimate_llm_cost(1_000_000, 1_000_000)
+        handler.record_cost(deep_cost)
+        handler._deep_cost += deep_cost  # 模拟 on_llm_end 对 deep 模型的归类
+        handler._active_llm_model = "deepseek-flash"
+        quick_cost = handler._estimate_llm_cost(1_000_000, 1_000_000)
+        handler.record_cost(quick_cost)
+        self.assertAlmostEqual(handler._total_cost, deep_cost + quick_cost)
+        self.assertAlmostEqual(handler.deep_cost_usd, deep_cost)
+        self.assertAlmostEqual(deep_cost, 5.28)
+        self.assertAlmostEqual(quick_cost, 0.75)
+
     def test_aggregate_progress_empty(self):
         """聚合空日志 — 所有阶段 pending"""
         result = aggregate_progress([])
@@ -283,7 +343,14 @@ class TestTradingAgentsAgent(unittest.TestCase):
         agent = TradingAgentsAgent()
         self.assertEqual(set(agent.analyst_types), VALID_ANALYSTS)
         self.assertEqual(agent.debate_rounds, 1)
-        self.assertEqual(agent.monthly_budget_usd, 10.0)
+        self.assertEqual(agent.monthly_budget_usd, 0.0)
+
+    def test_agent_deep_budget_defaults_to_25_and_quick_is_not_globally_limited(self):
+        """默认硬顶只适用于 deep_model，不恢复旧的全模型 $10 拦截。"""
+        agent = TradingAgentsAgent()
+        self.assertEqual(agent.monthly_budget_usd, 0.0)
+        self.assertEqual(agent.monthly_deep_budget_usd, 25.0)
+        self.assertEqual(agent.deep_budget_action, "fallback_quick")
 
     def test_agent_init_rejects_invalid_analyst(self):
         """初始化时校验 analyst 类型 — 非法值抛 ValueError"""

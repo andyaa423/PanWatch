@@ -69,26 +69,8 @@ def _within_cooldown(db: Session, stock_symbol: str, cooldown_hours: int) -> boo
 
 
 def _budget_allows(db: Session) -> bool:
-    """检查月度预算是否还有余量。预算从 tradingagents 的 raw_config.monthly_budget_usd 读。"""
-    try:
-        from src.modules.automation.tradingagents.cost_tracker import check_budget
-    except ImportError:
-        return True
-
-    agent = db.query(AgentConfig).filter(AgentConfig.name == "tradingagents").first()
-    if not agent:
-        return True
-    raw = agent.raw_config or {}
-    budget = float(raw.get("monthly_budget_usd") or 0.0)
-    if budget <= 0:
-        return True  # 没设上限 = 不限制
-
-    try:
-        status = check_budget(budget)
-        return not status.get("exceeded", False)
-    except Exception as e:
-        logger.warning(f"[auto_trigger] 预算检查失败,放行: {e}")
-        return True
+    """深度预算触顶后会在 Agent 内降级到 quick_model，自动触发无需被阻断。"""
+    return True
 
 
 def should_auto_trigger(
