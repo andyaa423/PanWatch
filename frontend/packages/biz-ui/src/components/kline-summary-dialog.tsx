@@ -8,6 +8,11 @@ import { HoverPopover } from '@panwatch/base-ui/components/ui/hover-popover'
 import { TechnicalBadge, technicalToneFromSuggestionAction } from '@panwatch/biz-ui/components/technical-badge'
 
 export interface KlineSummaryData {
+  obv?: number | null
+  obv_change?: number | null
+  mfi?: number | null
+  factor_trade_date?: string | null
+  factor_source?: string | null
   // meta (from backend)
   timeframe?: string
   computed_at?: string
@@ -93,40 +98,6 @@ export function KlineSummaryDialog({
   const [summary, setSummary] = useState<KlineSummaryData | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const buildSuggestion = (s: KlineSummaryData, holding?: boolean) => {
-    const scored = buildKlineSuggestion(s, holding)
-    const items: Array<{ text: string; delta: number }> = []
-    let localScore = 0
-
-    const add = (text: string, delta: number) => { items.push({ text, delta }); localScore += delta }
-
-    if (s.trend?.includes('多头')) add('均线多头排列，趋势偏强', 2)
-    else if (s.trend?.includes('空头')) add('均线空头排列，趋势偏弱', -2)
-
-    if (s.macd_status?.includes('金叉')) add('MACD 金叉，短线动能偏强', 2)
-    if (s.macd_status?.includes('死叉')) add('MACD 死叉，短线动能转弱', -2)
-    if (typeof s.macd_hist === 'number') add(`MACD 柱体${s.macd_hist > 0 ? '为正' : s.macd_hist < 0 ? '为负' : '接近0'}`, s.macd_hist > 0 ? 1 : s.macd_hist < 0 ? -1 : 0)
-
-    if (s.rsi_status?.includes('超卖')) add('RSI 超卖，可能存在反弹', 1)
-    else if (s.rsi_status?.includes('偏强')) add('RSI 偏强，买盘占优', 1)
-    else if (s.rsi_status?.includes('超买')) add('RSI 超买，注意回调风险', -1)
-    else if (s.rsi_status?.includes('偏弱')) add('RSI 偏弱，短线承压', -1)
-
-    if (s.kdj_status?.includes('金叉')) add('KDJ 金叉，短线转强', 1)
-    if (s.kdj_status?.includes('死叉')) add('KDJ 死叉，短线转弱', -1)
-
-    if (s.boll_status?.includes('突破上轨')) add('突破布林上轨，趋势强势', 1)
-    else if (s.boll_status?.includes('跌破下轨')) add('跌破布林下轨，走势偏弱', -1)
-
-    if (s.volume_trend?.includes('放量')) add('放量配合，资金参与度提升', 1)
-    else if (s.volume_trend?.includes('缩量')) add('缩量，动能不足', -1)
-
-    if (s.last_close != null && s.support != null && s.support > 0 && s.last_close <= s.support * 1.02) add('价格接近支撑位，止跌反弹概率提升', 1)
-    if (s.last_close != null && s.resistance != null && s.resistance > 0 && s.last_close >= s.resistance * 0.98) add('价格接近压力位，上行空间受限', -1)
-
-    return { ...scored, score: localScore, items }
-  }
-
   useEffect(() => {
     if (!open || !symbol) return
 
@@ -150,7 +121,7 @@ export function KlineSummaryDialog({
   }, [open, symbol, market, initialSummary])
 
   const effectiveSummary = initialSummary || summary
-  const suggestion = effectiveSummary ? buildSuggestion(effectiveSummary, hasPosition) : null
+  const suggestion = effectiveSummary ? buildKlineSuggestion(effectiveSummary, hasPosition) : null
 
   const handleAskAI = useCallback(() => {
     if (!effectiveSummary) return
@@ -172,8 +143,8 @@ export function KlineSummaryDialog({
     if (s.ma5 != null) parts.push(`均线：MA5=${s.ma5.toFixed(2)} MA10=${s.ma10?.toFixed(2)} MA20=${s.ma20?.toFixed(2)} MA60=${s.ma60?.toFixed(2)}`)
     if (suggestion) {
       parts.push(`技术评分：${suggestion.action_label}(score=${suggestion.score})，信号：${suggestion.signal || '中性'}`)
-      if (suggestion.items.length) {
-        parts.push(`评分依据：${suggestion.items.map(e => `${e.text}(${e.delta > 0 ? '+' : ''}${e.delta})`).join('；')}`)
+      if (suggestion.evidence.length) {
+        parts.push(`评分依据：${suggestion.evidence.map(e => `${e.text}(${e.delta > 0 ? '+' : ''}${e.delta})`).join('；')}`)
       }
     }
     window.dispatchEvent(new CustomEvent('panwatch-open-chat', {
@@ -227,10 +198,15 @@ export function KlineSummaryDialog({
                 <div className="mt-2 text-[12px] text-foreground font-medium">
                   {suggestion.signal}
                 </div>
+                <div className="mt-1 text-[10px] text-muted-foreground">
+                  趋势分 {suggestion.trend_score >= 0 ? '+' : ''}{suggestion.trend_score}
+                  {' · '}量能确认 {suggestion.volume_confirmation >= 0 ? '+' : ''}{suggestion.volume_confirmation}
+                  {' · '}其他 {suggestion.other_score >= 0 ? '+' : ''}{suggestion.other_score}
+                </div>
 
-                {suggestion.items.length > 0 && (
+                {suggestion.evidence.length > 0 && (
                   <div className="mt-2 space-y-1">
-                    {suggestion.items.map((it, idx) => {
+                    {suggestion.evidence.map((it, idx) => {
                       const color =
                         it.delta > 0 ? 'text-rose-500' :
                         it.delta < 0 ? 'text-emerald-500' :

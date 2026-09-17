@@ -14,12 +14,29 @@ export interface KlineScoreSuggestion {
   action_label: string
   signal: string
   score: number
+  trend_score: number
+  volume_confirmation: number
+  other_score: number
   evidence: KlineEvidenceItem[]
   tags: string[]
 }
 
+export function volumeConfirmation(obvChange: number | null | undefined, mfi: number | null | undefined, trend: 'bull' | 'bear'): number {
+  if (!Number.isFinite(obvChange) || !Number.isFinite(mfi)) return 0
+  const obvSame = trend === 'bull' ? obvChange! > 0 : obvChange! < 0
+  const mfiSame = trend === 'bull' ? mfi! >= 55 : mfi! <= 45
+  // 确认用 AND、削弱用 OR：宁可谨慎确认，也容易触发风险警示；顺序刻意如此。
+  if (obvSame && mfiSame) return trend === 'bull' ? 1 : -1
+  const obvOpposite = trend === 'bull' ? obvChange! < 0 : obvChange! > 0
+  const mfiOpposite = trend === 'bull' ? mfi! <= 45 : mfi! >= 55
+  if (obvOpposite || mfiOpposite) return trend === 'bull' ? -1 : 1
+  return 0
+}
+
 export function buildKlineSuggestion(s: KlineSummaryData, holding?: boolean): KlineScoreSuggestion {
   let score = 0
+  let trendScore = 0
+  let volumeScore = 0
   const items: KlineEvidenceItem[] = []
   const tags: string[] = []
 
@@ -31,33 +48,35 @@ export function buildKlineSuggestion(s: KlineSummaryData, holding?: boolean): Kl
   const tf = s.timeframe || '1d'
   const asof = s.asof ? `截至${s.asof}` : ''
 
-  const addItem = (text: string, delta: number = 0, tag?: string, details?: string) => {
+  const addItem = (text: string, delta: number = 0, tag?: string, details?: string, bucket: 'trend' | 'volume' | 'other' = 'other') => {
     items.push({ text, delta, tag, details })
     score += delta
+    if (bucket === 'trend') trendScore += delta
+    if (bucket === 'volume') volumeScore += delta
     if (tag) tags.push(tag)
   }
 
   // Trend
   if (s.trend?.includes('多头')) {
-    addItem('均线多头排列，趋势偏强', 2, '多头', `周期${tf} ${asof} · MA5/10/20: ${fmt(s.ma5)}/${fmt(s.ma10)}/${fmt(s.ma20)}`)
+    addItem('均线多头排列，趋势偏强', 2, '多头', `周期${tf} ${asof} · MA5/10/20: ${fmt(s.ma5)}/${fmt(s.ma10)}/${fmt(s.ma20)}`, 'trend')
   } else if (s.trend?.includes('空头')) {
-    addItem('均线空头排列，趋势偏弱', -2, '空头', `周期${tf} ${asof} · MA5/10/20: ${fmt(s.ma5)}/${fmt(s.ma10)}/${fmt(s.ma20)}`)
+    addItem('均线空头排列，趋势偏弱', -2, '空头', `周期${tf} ${asof} · MA5/10/20: ${fmt(s.ma5)}/${fmt(s.ma10)}/${fmt(s.ma20)}`, 'trend')
   } else if (s.trend?.includes('交织')) {
     addItem('均线交织，趋势不明', 0, undefined, `周期${tf} ${asof} · MA5/10/20: ${fmt(s.ma5)}/${fmt(s.ma10)}/${fmt(s.ma20)}`)
   }
 
   // MACD
   if (s.macd_status?.includes('金叉')) {
-    addItem('MACD 金叉，短线动能偏强', 2, 'MACD金叉', `周期${tf} ${asof} · hist: ${fmt(s.macd_hist, 3)}`)
+    addItem('MACD 金叉，短线动能偏强', 2, 'MACD金叉', `周期${tf} ${asof} · hist: ${fmt(s.macd_hist, 3)}`, 'trend')
   }
   if (s.macd_status?.includes('死叉')) {
-    addItem('MACD 死叉，短线动能转弱', -2, 'MACD死叉', `周期${tf} ${asof} · hist: ${fmt(s.macd_hist, 3)}`)
+    addItem('MACD 死叉，短线动能转弱', -2, 'MACD死叉', `周期${tf} ${asof} · hist: ${fmt(s.macd_hist, 3)}`, 'trend')
   }
   if (s.macd_hist != null) {
     if (s.macd_hist > 0.0) {
-      addItem('MACD 柱体为正（动能偏多）', 1, undefined, `周期${tf} ${asof} · hist: ${fmt(s.macd_hist, 3)}`)
+      addItem('MACD 柱体为正（动能偏多）', 1, undefined, `周期${tf} ${asof} · hist: ${fmt(s.macd_hist, 3)}`, 'trend')
     } else if (s.macd_hist < 0.0) {
-      addItem('MACD 柱体为负（动能偏空）', -1, undefined, `周期${tf} ${asof} · hist: ${fmt(s.macd_hist, 3)}`)
+      addItem('MACD 柱体为负（动能偏空）', -1, undefined, `周期${tf} ${asof} · hist: ${fmt(s.macd_hist, 3)}`, 'trend')
     }
   }
 
@@ -76,10 +95,10 @@ export function buildKlineSuggestion(s: KlineSummaryData, holding?: boolean): Kl
 
   // KDJ
   if (s.kdj_status?.includes('金叉')) {
-    addItem('KDJ 金叉，短线转强', 1, 'KDJ金叉', `周期${tf} ${asof} · K/D/J: ${fmt(s.kdj_k, 1)}/${fmt(s.kdj_d, 1)}/${fmt(s.kdj_j, 1)}`)
+    addItem('KDJ 金叉，短线转强', 1, 'KDJ金叉', `周期${tf} ${asof} · K/D/J: ${fmt(s.kdj_k, 1)}/${fmt(s.kdj_d, 1)}/${fmt(s.kdj_j, 1)}`, 'trend')
   }
   if (s.kdj_status?.includes('死叉')) {
-    addItem('KDJ 死叉，短线转弱', -1, 'KDJ死叉', `周期${tf} ${asof} · K/D/J: ${fmt(s.kdj_k, 1)}/${fmt(s.kdj_d, 1)}/${fmt(s.kdj_j, 1)}`)
+    addItem('KDJ 死叉，短线转弱', -1, 'KDJ死叉', `周期${tf} ${asof} · K/D/J: ${fmt(s.kdj_k, 1)}/${fmt(s.kdj_d, 1)}/${fmt(s.kdj_j, 1)}`, 'trend')
   }
 
   // BOLL
@@ -107,6 +126,21 @@ export function buildKlineSuggestion(s: KlineSummaryData, holding?: boolean): Kl
     if (s.last_close >= s.resistance * 0.98) {
       const dist = (s.last_close - s.resistance) / s.resistance * 100
       addItem('价格接近压力位，上行空间受限', -1, '靠近压力', `周期${tf} ${asof} · close: ${fmt(s.last_close)} · 压力: ${fmt(s.resistance)} · 距离: ${dist >= 0 ? '+' : ''}${dist.toFixed(1)}%（阈值>=-2%）`)
+    }
+  }
+
+  if (trendScore !== 0) {
+    const trend: 'bull' | 'bear' = trendScore > 0 ? 'bull' : 'bear'
+    const adjustment = volumeConfirmation(s.obv_change, s.mfi, trend)
+    if (adjustment !== 0) {
+      const confirmed = (adjustment > 0) === (trendScore > 0)
+      addItem(
+        confirmed ? 'OBV/MFI 与趋势同向，量能确认' : 'OBV/MFI 与趋势背离，量能削弱',
+        adjustment,
+        confirmed ? '量能确认' : '量能背离',
+        `OBV变化: ${fmt(s.obv_change, 0)} · MFI: ${fmt(s.mfi, 1)}`,
+        'volume',
+      )
     }
   }
 
@@ -145,6 +179,9 @@ export function buildKlineSuggestion(s: KlineSummaryData, holding?: boolean): Kl
     action_label: actionLabel(action),
     signal,
     score,
+    trend_score: trendScore,
+    volume_confirmation: volumeScore,
+    other_score: score - trendScore - volumeScore,
     evidence: items,
     tags: uniqTags,
   }
