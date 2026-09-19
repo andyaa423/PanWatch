@@ -32,6 +32,7 @@ from marketdata.vendors.market_flow import (
     EastmoneyMarginVendor,
     EastmoneyShareholdersVendor,
 )
+from marketdata.vendors.tushare_corporate_actions import TushareDividendVendor, TushareShareholdersVendor
 from marketdata.vendors.news import (
     EastmoneyAnnNewsVendor,
     EastmoneyStockNewsVendor,
@@ -86,9 +87,11 @@ VENDOR_CLASSES_BY_TYPE: dict[str, dict[str, type]] = {
     },
     "shareholders": {
         "eastmoney": EastmoneyShareholdersVendor,
+        "tushare": TushareShareholdersVendor,
     },
     "dividend": {
         "eastmoney": EastmoneyDividendVendor,
+        "tushare": TushareDividendVendor,
     },
     "northbound": {
         "ths": HexinNorthboundVendor,
