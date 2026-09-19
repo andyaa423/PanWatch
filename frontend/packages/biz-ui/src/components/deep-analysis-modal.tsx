@@ -49,6 +49,21 @@ const STORAGE_KEY_PREFIX = 'panwatch:tradingagents:running:'
 /** trace_id 持续多久后认为可能已不再运行(避免显示过期 trace 的 idle) */
 const TRACE_MAX_AGE_MS = 20 * 60 * 1000  // 20 分钟
 
+/** 深度分析记录由后端按应用时区返回；页面统一显示为中国标准时间。 */
+function formatAnalysisTime(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value.replace('T', ' ').slice(0, 16)
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date).replace(/\//g, '-')
+}
+
 function loadRunningTrace(stockSymbol: string): string | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_PREFIX + stockSymbol)
@@ -677,12 +692,15 @@ function DoneView({
   const analysisDate = result.timestamp
     ? String(result.timestamp).slice(0, 10)
     : new Date().toISOString().slice(0, 10)
+  const analysisTime = result.timestamp
+    ? formatAnalysisTime(result.timestamp)
+    : null
 
   return (
     <div className="space-y-4 text-[13px]">
       {fromCache && (
         <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-2 text-[12px] text-amber-700 dark:text-amber-400 flex items-center justify-between">
-          <span>ℹ️ 当日缓存:今天已经分析过这只股票,展示缓存结果(无新成本)</span>
+          <span>ℹ️ 当日缓存:本次分析于 {analysisTime || '今天'} 完成，展示缓存结果(无新成本)</span>
           <Button variant="outline" size="sm" onClick={onRerun} className="ml-3 h-7 text-[11px]">
             忽略缓存重新分析
           </Button>
@@ -697,6 +715,11 @@ function DoneView({
         <span className="text-[12px] text-muted-foreground">
           置信度 {sug.confidence?.toFixed(1) ?? '-'} / 10
         </span>
+        {analysisTime && (
+          <span className="text-[12px] text-muted-foreground">
+            分析时间 {analysisTime}
+          </span>
+        )}
         <Button
           variant="outline"
           size="sm"

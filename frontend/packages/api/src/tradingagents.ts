@@ -251,14 +251,21 @@ export const tradingAgentsApi = {
       `/agents/tradingagents/latest?stock_symbol=${encodeURIComponent(symbol)}`,
     ).then((item: unknown) => {
       if (!item || typeof item !== 'object') return null
-      const rec = item as { content?: string; title?: string; raw_data?: unknown; analysis_date?: string }
+      const rec = item as {
+        content?: string
+        title?: string
+        raw_data?: unknown
+        analysis_date?: string
+        created_at?: string
+      }
       if (!rec.content) return null
       return {
         agent_name: 'tradingagents',
         title: rec.title || '',
         content: rec.content || '',
         raw_data: (rec.raw_data || {}) as DeepAnalysisResult['raw_data'],
-        timestamp: rec.analysis_date,
+        // analysis_date 只有日期；优先使用落库时的精确时间，避免缓存结果看不出生成时刻。
+        timestamp: rec.created_at || rec.analysis_date,
       }
     })
   },
