@@ -1003,15 +1003,14 @@ class IntradayMonitorAgent(BaseAgent):
             if not data.get("stock_data"):
                 return None
 
-            # 事件门禁仅作为上下文信号，不阻断 AI 分析。
-            # 产品策略：建议持续刷新，通知再由 should_alert + throttle 控制降噪。
+            # 每轮都采集规则；事件门禁命中前不调用 LLM，避免五分钟重复分析。
             if self.event_only:
                 try:
-                    from src.modules.strategy.intraday_event_gate import check_and_update
+                    from src.modules.strategy.intraday_event_gate import check_trigger
 
                     stock = data.get("stock_data")
                     kline_summary = data.get("kline_summary")
-                    decision = check_and_update(
+                    decision = check_trigger(
                         symbol=stock_symbol,
                         change_pct=getattr(stock, "change_pct", None),
                         volume_ratio=(kline_summary or {}).get("volume_ratio"),
@@ -1023,10 +1022,20 @@ class IntradayMonitorAgent(BaseAgent):
                         "reasons": decision.reasons,
                         "should_analyze": bool(decision.should_analyze),
                     }
+                    if not decision.should_analyze:
+                        return AnalysisResult(
+                            agent_name=self.name,
+                            title=f"【{self.display_name}】规则无显著变化",
+                            content="本轮规则已刷新；未达到 AI 解读触发条件。",
+                            raw_data={"skipped": True, "skip_reason": "event_gate", "event_gate": data["event_gate"], **data},
+                        )
                 except Exception as e:
                     logger.debug(f"事件门禁异常，继续分析: {e}")
 
             result = await self.analyze(context, data)
+            if self.event_only and data.get("event_gate", {}).get("should_analyze"):
+                from src.modules.strategy.intraday_event_gate import mark_analyzed
+                mark_analyzed(stock_symbol, decision.snapshot)
 
             if getattr(context, "suppress_notify", False):
                 result.raw_data["notified"] = False
