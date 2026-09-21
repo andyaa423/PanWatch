@@ -611,6 +611,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "supports_batch": True,
             "test_symbols": ["600519", "000001"],
         },
+        {"name": "Tushare 股东户数", "type": "shareholders", "provider": "tushare", "config": {"token": "", "description": "Tushare Pro 季度股东户数备源。"}, "enabled": True, "priority": 10, "supports_batch": True, "test_symbols": ["600519", "000001"]},
         {
             "name": "东财分红",
             "type": "dividend",
@@ -621,6 +622,7 @@ DATA_SOURCE_SEEDS: list[dict] = [
             "supports_batch": True,
             "test_symbols": ["600519", "000001"],
         },
+        {"name": "Tushare 分红", "type": "dividend", "provider": "tushare", "config": {"token": "", "description": "Tushare Pro 分红送股备源。"}, "enabled": True, "priority": 10, "supports_batch": True, "test_symbols": ["600519", "000001"]},
         {
             "name": "同花顺北向资金",
             "type": "northbound",
